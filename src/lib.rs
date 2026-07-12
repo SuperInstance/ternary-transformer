@@ -32,6 +32,11 @@ impl Trit {
         self as i8
     }
 
+    /// Convert to f32 (-1.0, 0.0, or 1.0). Useful for interop with FP code paths.
+    pub fn to_f32(self) -> f32 {
+        self.to_i8() as f32
+    }
+
     /// Ternary negation: -(-1)=1, -(0)=0, -(1)=-1.
     pub fn negate(self) -> Self {
         match self {
@@ -251,15 +256,18 @@ pub fn multi_head_attention(
     concat.matmul(w_o)
 }
 
-/// Ternary sinusoidal position encoding.
+/// Deterministic ternary position encoding.
 ///
-/// Generates position encodings in ℤ₃ using a ternary sinusoidal pattern.
-/// For each position `pos` and dimension `i`:
-///   - Even i: trit = (pos / 10000^(2i/d)) scaled and quantized to {-1, 0, 1}
-///   - Odd i: similar with cosine pattern
+/// Generates a position-dependent trit pattern in ℤ₃. The implementation uses
+/// a fixed modular scheme keyed on `(pos, i)` — even and odd dimensions follow
+/// different period-varying patterns — so each `(pos, i)` maps to a reproducible
+/// trit. It is *not* a quantized sin/cos table.
 ///
-/// The encoding uses a deterministic pattern based on position and dimension
-/// to ensure uniqueness across positions.
+/// Uniqueness across positions is *not* guaranteed for all `(seq_len, d_model)`
+/// pairs (e.g. with `d_model = 1` only three distinct rows exist). For the
+/// common case where `d_model` is large enough relative to `seq_len`, rows are
+/// distinct; see `test_position_encoding_uniqueness` for the configuration that
+/// is verified.
 pub fn ternary_position_encoding(seq_len: usize, d_model: usize) -> TernaryMatrix {
     let mut pe = TernaryMatrix::zeros(seq_len, d_model);
 
@@ -447,13 +455,17 @@ mod tests {
     }
 
     #[test]
-    fn test_ternary_mul() {
-        assert_eq!(ternary_mul(Trit::One, Trit::One), Trit::One);
-        assert_eq!(ternary_mul(Trit::NegOne, Trit::One), Trit::NegOne);
-        assert_eq!(ternary_mul(Trit::One, Trit::NegOne), Trit::NegOne);
+    fn test_ternary_mul_all_pairs() {
+        // Verify all 9 pairs produce correct results
         assert_eq!(ternary_mul(Trit::NegOne, Trit::NegOne), Trit::One);
+        assert_eq!(ternary_mul(Trit::NegOne, Trit::Zero), Trit::Zero);
+        assert_eq!(ternary_mul(Trit::NegOne, Trit::One), Trit::NegOne);
+        assert_eq!(ternary_mul(Trit::Zero, Trit::NegOne), Trit::Zero);
+        assert_eq!(ternary_mul(Trit::Zero, Trit::Zero), Trit::Zero);
         assert_eq!(ternary_mul(Trit::Zero, Trit::One), Trit::Zero);
+        assert_eq!(ternary_mul(Trit::One, Trit::NegOne), Trit::NegOne);
         assert_eq!(ternary_mul(Trit::One, Trit::Zero), Trit::Zero);
+        assert_eq!(ternary_mul(Trit::One, Trit::One), Trit::One);
     }
 
     #[test]
@@ -468,6 +480,22 @@ mod tests {
         assert_eq!(Trit::NegOne.negate(), Trit::One);
         assert_eq!(Trit::Zero.negate(), Trit::Zero);
         assert_eq!(Trit::One.negate(), Trit::NegOne);
+    }
+
+    #[test]
+    fn test_trit_conversions() {
+        // to_i8 round-trips through from_i8 for the canonical values
+        assert_eq!(Trit::NegOne.to_i8(), -1);
+        assert_eq!(Trit::Zero.to_i8(), 0);
+        assert_eq!(Trit::One.to_i8(), 1);
+        assert_eq!(Trit::from_i8(Trit::NegOne.to_i8()), Trit::NegOne);
+        assert_eq!(Trit::from_i8(Trit::Zero.to_i8()), Trit::Zero);
+        assert_eq!(Trit::from_i8(Trit::One.to_i8()), Trit::One);
+
+        // to_f32 matches the documented {-1.0, 0.0, 1.0} mapping
+        assert_eq!(Trit::NegOne.to_f32(), -1.0);
+        assert_eq!(Trit::Zero.to_f32(), 0.0);
+        assert_eq!(Trit::One.to_f32(), 1.0);
     }
 
     #[test]
@@ -516,11 +544,27 @@ mod tests {
         assert_eq!(output.rows, 2);
         assert_eq!(output.cols, 3);
 
-        // Manually compute for query[0] = [1, 0, -1]:
-        // score[0][0] = dot([1,0,-1], [1,1,0]) = 1*1 + 0*1 + (-1)*0 = 1
-        // score[0][1] = dot([1,0,-1], [-1,0,1]) = 1*(-1) + 0*0 + (-1)*1 = -1 + -1 = 1 (mod 3)
-        // output[0][0] = 1*v[0][0] + 1*v[1][0] = 1*1 + 1*0 = 1
-        assert_eq!(output.get(0, 0), Trit::One);
+        // Manual computation of scores[i][j] = dot(Q[i], K[j]) in Z3:
+        //   s[0][0] = 1*1 + 0*1 + (-1)*0 = 1
+        //   s[0][1] = 1*(-1) + 0*0 + (-1)*1 = -1 + -1 = 1 (mod 3)
+        //   s[1][0] = 0*1 + 1*1 + 1*0     = 1
+        //   s[1][1] = 0*(-1) + 1*0 + 1*1  = 1
+        // Both score rows are [1, 1], so:
+        //   output[i][c] = 1*V[0][c] + 1*V[1][c] = V[0][c] + V[1][c]
+        // V[0] = [1,0,0], V[1] = [0,1,1]  -> each col sums to 1.
+        let expected = TernaryMatrix::from_flat(
+            2,
+            3,
+            vec![
+                Trit::One,
+                Trit::One,
+                Trit::One,
+                Trit::One,
+                Trit::One,
+                Trit::One,
+            ],
+        );
+        assert_eq!(output, expected);
     }
 
     #[test]
@@ -797,10 +841,26 @@ mod tests {
         assert_eq!(output.rows, seq_len);
         assert_eq!(output.cols, d_model);
 
-        // All outputs should be valid trits
-        for t in &output.data {
-            assert!(matches!(t, Trit::NegOne | Trit::Zero | Trit::One));
-        }
+        // With identity weights: Q=K=V=input, FFN(x)=x, so the block reduces to
+        //   x  = residual(input, attention(input, input, input))
+        //   out = residual(x, x)        // since FFN(x) = x
+        // Hand-computing attention(input,input,input) gives scores [[0,-1],[-1,-1]],
+        // which yields the exact output below (each row is x + x in Z3).
+        let expected = TernaryMatrix::from_flat(
+            seq_len,
+            d_model,
+            vec![
+                Trit::NegOne,
+                Trit::One,
+                Trit::NegOne,
+                Trit::NegOne,
+                Trit::One,
+                Trit::Zero,
+                Trit::NegOne,
+                Trit::One,
+            ],
+        );
+        assert_eq!(output, expected);
     }
 
     #[test]
@@ -910,5 +970,91 @@ mod tests {
         let d = vec![Trit::One, Trit::One];
         // 1*1 + (-1)*1 = 1 + (-1) = 0
         assert_eq!(ternary_dot(&c, &d), Trit::Zero);
+    }
+
+    #[test]
+    fn test_dot_length_mismatch_panics() {
+        let a = vec![Trit::One, Trit::Zero];
+        let b = vec![Trit::One];
+        let result = std::panic::catch_unwind(|| ternary_dot(&a, &b));
+        assert!(result.is_err(), "expected panic on length mismatch");
+    }
+
+    #[test]
+    fn test_matmul_dim_mismatch_panics() {
+        // a is 2x3, b is 2x2 -> incompatible (a.cols=3 != b.rows=2)
+        let a = TernaryMatrix::from_flat(2, 3, vec![Trit::One; 6]);
+        let b = TernaryMatrix::from_flat(2, 2, vec![Trit::One; 4]);
+        let result = std::panic::catch_unwind(|| a.matmul(&b));
+        assert!(
+            result.is_err(),
+            "expected panic on incompatible matmul dims"
+        );
+    }
+
+    #[test]
+    fn test_multi_head_indivisible_d_model_panics() {
+        let d_model = 4;
+        let input = TernaryMatrix::zeros(2, d_model);
+        // d_model=4 not divisible by 3 heads
+        let w = TernaryMatrix::zeros(d_model, d_model);
+        let result = std::panic::catch_unwind(|| multi_head_attention(&input, &w, &w, &w, &w, 3));
+        assert!(
+            result.is_err(),
+            "expected panic when d_model is not divisible by num_heads"
+        );
+    }
+
+    #[test]
+    fn test_ffn_identity_weights() {
+        // With square identity weights W1=I, W2=I, FFN(x) = (x·I)·I = x.
+        let d_model = 3;
+        let identity = TernaryMatrix::from_flat(
+            d_model,
+            d_model,
+            vec![
+                Trit::One,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::One,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::One,
+            ],
+        );
+        let x = TernaryMatrix::from_flat(
+            2,
+            d_model,
+            vec![
+                Trit::One,
+                Trit::NegOne,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::One,
+                Trit::One,
+            ],
+        );
+        let out = ternary_ffn(&x, &identity, &identity);
+        assert_eq!(out, x);
+    }
+
+    #[test]
+    fn test_transpose_is_self_inverse() {
+        let m = TernaryMatrix::from_flat(
+            2,
+            3,
+            vec![
+                Trit::One,
+                Trit::Zero,
+                Trit::NegOne,
+                Trit::Zero,
+                Trit::One,
+                Trit::One,
+            ],
+        );
+        // Transposing twice must reproduce the original matrix.
+        assert_eq!(m.transpose().transpose(), m);
     }
 }
