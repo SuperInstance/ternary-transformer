@@ -51,15 +51,15 @@ impl fmt::Display for Trit {
 /// Addition in ℤ₃ using explicit match on all 9 pairs.
 pub fn ternary_add(a: Trit, b: Trit) -> Trit {
     match (a, b) {
-        (Trit::NegOne, Trit::NegOne) => Trit::One,   // -1 + -1 = -2 ≡ 1 (mod 3)
-        (Trit::NegOne, Trit::Zero)  => Trit::NegOne,  // -1 + 0 = -1
-        (Trit::NegOne, Trit::One)   => Trit::Zero,    // -1 + 1 = 0
-        (Trit::Zero, Trit::NegOne)  => Trit::NegOne,  // 0 + -1 = -1
-        (Trit::Zero, Trit::Zero)    => Trit::Zero,    // 0 + 0 = 0
-        (Trit::Zero, Trit::One)     => Trit::One,     // 0 + 1 = 1
-        (Trit::One, Trit::NegOne)   => Trit::Zero,    // 1 + -1 = 0
-        (Trit::One, Trit::Zero)     => Trit::One,     // 1 + 0 = 1
-        (Trit::One, Trit::One)      => Trit::NegOne,  // 1 + 1 = 2 ≡ -1 (mod 3)
+        (Trit::NegOne, Trit::NegOne) => Trit::One, // -1 + -1 = -2 ≡ 1 (mod 3)
+        (Trit::NegOne, Trit::Zero) => Trit::NegOne, // -1 + 0 = -1
+        (Trit::NegOne, Trit::One) => Trit::Zero,   // -1 + 1 = 0
+        (Trit::Zero, Trit::NegOne) => Trit::NegOne, // 0 + -1 = -1
+        (Trit::Zero, Trit::Zero) => Trit::Zero,    // 0 + 0 = 0
+        (Trit::Zero, Trit::One) => Trit::One,      // 0 + 1 = 1
+        (Trit::One, Trit::NegOne) => Trit::Zero,   // 1 + -1 = 0
+        (Trit::One, Trit::Zero) => Trit::One,      // 1 + 0 = 1
+        (Trit::One, Trit::One) => Trit::NegOne,    // 1 + 1 = 2 ≡ -1 (mod 3)
     }
 }
 
@@ -161,7 +161,10 @@ pub fn ternary_attention(
     value: &TernaryMatrix,
 ) -> TernaryMatrix {
     assert_eq!(query.cols, key.cols, "Q and K must have same dimension");
-    assert_eq!(key.rows, value.rows, "K and V must have same sequence length");
+    assert_eq!(
+        key.rows, value.rows,
+        "K and V must have same sequence length"
+    );
 
     let seq_len_q = query.rows;
     let _d = query.cols;
@@ -200,7 +203,11 @@ pub fn multi_head_attention(
     let d_model = input.cols;
     let head_dim = d_model / num_heads;
 
-    assert_eq!(d_model % num_heads, 0, "d_model must be divisible by num_heads");
+    assert_eq!(
+        d_model % num_heads,
+        0,
+        "d_model must be divisible by num_heads"
+    );
     assert_eq!(w_q.rows, d_model);
     assert_eq!(w_k.rows, d_model);
     assert_eq!(w_v.rows, d_model);
@@ -265,14 +272,22 @@ pub fn ternary_position_encoding(seq_len: usize, d_model: usize) -> TernaryMatri
                 let period = 3 + (i / 2) % 4; // period varies with dimension
                 let val = (pos + i + 1) % (period * 2);
                 if val < period {
-                    if val % 3 == 0 { Trit::Zero }
-                    else if val % 3 == 1 { Trit::One }
-                    else { Trit::NegOne }
+                    if val % 3 == 0 {
+                        Trit::Zero
+                    } else if val % 3 == 1 {
+                        Trit::One
+                    } else {
+                        Trit::NegOne
+                    }
                 } else {
                     let v = (val - period) % 3;
-                    if v == 0 { Trit::Zero }
-                    else if v == 1 { Trit::NegOne }
-                    else { Trit::One }
+                    if v == 0 {
+                        Trit::Zero
+                    } else if v == 1 {
+                        Trit::NegOne
+                    } else {
+                        Trit::One
+                    }
                 }
             } else {
                 // Cos-like: shifted pattern
@@ -328,7 +343,11 @@ pub fn ternary_encoder_block(
     ternary_residual(&x, &ffn_out)
 }
 
-/// Ternary decoder block: masked self-attention + cross-attention + FFN, each with residuals.
+/// Ternary decoder block: self-attention (unmasked) + cross-attention + FFN, each with residuals.
+///
+/// Note: self-attention is intentionally unmasked. See README "Open questions"
+/// for why a causal mask is non-trivial in ℤ₃.
+#[allow(clippy::too_many_arguments)]
 pub fn ternary_decoder_block(
     target: &TernaryMatrix,
     memory: &TernaryMatrix,
@@ -362,6 +381,7 @@ pub fn ternary_decoder_block(
 }
 
 /// Full ternary transformer forward pass with encoder and decoder.
+#[allow(clippy::too_many_arguments)]
 pub fn ternary_transformer_forward(
     source: &TernaryMatrix,
     target: &TernaryMatrix,
@@ -389,16 +409,22 @@ pub fn ternary_transformer_forward(
     let tgt_input = ternary_residual(target, &tgt_pe);
 
     // Encoder
-    let encoded = ternary_encoder_block(
-        &src_input, enc_wq, enc_wk, enc_wv, enc_wo, enc_w1, enc_w2,
-    );
+    let encoded = ternary_encoder_block(&src_input, enc_wq, enc_wk, enc_wv, enc_wo, enc_w1, enc_w2);
 
     // Decoder
     ternary_decoder_block(
-        &tgt_input, &encoded,
-        dec_wq_self, dec_wk_self, dec_wv_self, dec_wo_self,
-        dec_wq_cross, dec_wk_cross, dec_wv_cross, dec_wo_cross,
-        dec_w1, dec_w2,
+        &tgt_input,
+        &encoded,
+        dec_wq_self,
+        dec_wk_self,
+        dec_wv_self,
+        dec_wo_self,
+        dec_wq_cross,
+        dec_wk_cross,
+        dec_wv_cross,
+        dec_wo_cross,
+        dec_w1,
+        dec_w2,
     )
 }
 
@@ -447,18 +473,42 @@ mod tests {
     #[test]
     fn test_attention_weight_computation() {
         // 2 tokens, 3 features
-        let q = TernaryMatrix::from_flat(2, 3, vec![
-            Trit::One, Trit::Zero, Trit::NegOne,
-            Trit::Zero, Trit::One, Trit::One,
-        ]);
-        let k = TernaryMatrix::from_flat(2, 3, vec![
-            Trit::One, Trit::One, Trit::Zero,
-            Trit::NegOne, Trit::Zero, Trit::One,
-        ]);
-        let v = TernaryMatrix::from_flat(2, 3, vec![
-            Trit::One, Trit::Zero, Trit::Zero,
-            Trit::Zero, Trit::One, Trit::One,
-        ]);
+        let q = TernaryMatrix::from_flat(
+            2,
+            3,
+            vec![
+                Trit::One,
+                Trit::Zero,
+                Trit::NegOne,
+                Trit::Zero,
+                Trit::One,
+                Trit::One,
+            ],
+        );
+        let k = TernaryMatrix::from_flat(
+            2,
+            3,
+            vec![
+                Trit::One,
+                Trit::One,
+                Trit::Zero,
+                Trit::NegOne,
+                Trit::Zero,
+                Trit::One,
+            ],
+        );
+        let v = TernaryMatrix::from_flat(
+            2,
+            3,
+            vec![
+                Trit::One,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::One,
+                Trit::One,
+            ],
+        );
 
         let output = ternary_attention(&q, &k, &v);
 
@@ -477,39 +527,112 @@ mod tests {
     fn test_multi_head_parallelism() {
         // d_model = 4, num_heads = 2, head_dim = 2
         let d_model = 4;
-        let d_ff = 4;
         let seq_len = 2;
         let num_heads = 2;
 
-        let input = TernaryMatrix::from_flat(seq_len, d_model, vec![
-            Trit::One, Trit::NegOne, Trit::Zero, Trit::One,
-            Trit::Zero, Trit::One, Trit::NegOne, Trit::Zero,
-        ]);
+        let input = TernaryMatrix::from_flat(
+            seq_len,
+            d_model,
+            vec![
+                Trit::One,
+                Trit::NegOne,
+                Trit::Zero,
+                Trit::One,
+                Trit::Zero,
+                Trit::One,
+                Trit::NegOne,
+                Trit::Zero,
+            ],
+        );
 
-        let w_q = TernaryMatrix::from_flat(d_model, d_model, vec![
-            Trit::One, Trit::Zero, Trit::Zero, Trit::One,
-            Trit::Zero, Trit::One, Trit::One, Trit::Zero,
-            Trit::NegOne, Trit::One, Trit::Zero, Trit::Zero,
-            Trit::One, Trit::Zero, Trit::NegOne, Trit::One,
-        ]);
-        let w_k = TernaryMatrix::from_flat(d_model, d_model, vec![
-            Trit::One, Trit::One, Trit::Zero, Trit::Zero,
-            Trit::Zero, Trit::NegOne, Trit::One, Trit::Zero,
-            Trit::One, Trit::Zero, Trit::Zero, Trit::One,
-            Trit::NegOne, Trit::One, Trit::One, Trit::Zero,
-        ]);
-        let w_v = TernaryMatrix::from_flat(d_model, d_model, vec![
-            Trit::One, Trit::Zero, Trit::NegOne, Trit::Zero,
-            Trit::Zero, Trit::One, Trit::Zero, Trit::One,
-            Trit::One, Trit::NegOne, Trit::One, Trit::Zero,
-            Trit::Zero, Trit::One, Trit::Zero, Trit::One,
-        ]);
-        let w_o = TernaryMatrix::from_flat(d_model, d_model, vec![
-            Trit::One, Trit::Zero, Trit::Zero, Trit::Zero,
-            Trit::Zero, Trit::One, Trit::Zero, Trit::Zero,
-            Trit::Zero, Trit::Zero, Trit::One, Trit::Zero,
-            Trit::Zero, Trit::Zero, Trit::Zero, Trit::One,
-        ]);
+        let w_q = TernaryMatrix::from_flat(
+            d_model,
+            d_model,
+            vec![
+                Trit::One,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::One,
+                Trit::Zero,
+                Trit::One,
+                Trit::One,
+                Trit::Zero,
+                Trit::NegOne,
+                Trit::One,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::One,
+                Trit::Zero,
+                Trit::NegOne,
+                Trit::One,
+            ],
+        );
+        let w_k = TernaryMatrix::from_flat(
+            d_model,
+            d_model,
+            vec![
+                Trit::One,
+                Trit::One,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::NegOne,
+                Trit::One,
+                Trit::Zero,
+                Trit::One,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::One,
+                Trit::NegOne,
+                Trit::One,
+                Trit::One,
+                Trit::Zero,
+            ],
+        );
+        let w_v = TernaryMatrix::from_flat(
+            d_model,
+            d_model,
+            vec![
+                Trit::One,
+                Trit::Zero,
+                Trit::NegOne,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::One,
+                Trit::Zero,
+                Trit::One,
+                Trit::One,
+                Trit::NegOne,
+                Trit::One,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::One,
+                Trit::Zero,
+                Trit::One,
+            ],
+        );
+        let w_o = TernaryMatrix::from_flat(
+            d_model,
+            d_model,
+            vec![
+                Trit::One,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::One,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::One,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::One,
+            ],
+        );
 
         let output = multi_head_attention(&input, &w_q, &w_k, &w_v, &w_o, num_heads);
 
@@ -534,9 +657,11 @@ mod tests {
         for i in 0..seq_len {
             for j in (i + 1)..seq_len {
                 assert_ne!(
-                    pe.row(i), pe.row(j),
+                    pe.row(i),
+                    pe.row(j),
                     "Positions {} and {} have identical encodings",
-                    i, j
+                    i,
+                    j
                 );
             }
         }
@@ -544,14 +669,30 @@ mod tests {
 
     #[test]
     fn test_residual_preserves_information() {
-        let input = TernaryMatrix::from_flat(2, 3, vec![
-            Trit::One, Trit::Zero, Trit::NegOne,
-            Trit::Zero, Trit::One, Trit::One,
-        ]);
-        let sublayer = TernaryMatrix::from_flat(2, 3, vec![
-            Trit::Zero, Trit::Zero, Trit::Zero,
-            Trit::Zero, Trit::Zero, Trit::Zero,
-        ]);
+        let input = TernaryMatrix::from_flat(
+            2,
+            3,
+            vec![
+                Trit::One,
+                Trit::Zero,
+                Trit::NegOne,
+                Trit::Zero,
+                Trit::One,
+                Trit::One,
+            ],
+        );
+        let sublayer = TernaryMatrix::from_flat(
+            2,
+            3,
+            vec![
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+            ],
+        );
 
         // Residual with zero sublayer should equal input
         let result = ternary_residual(&input, &sublayer);
@@ -567,15 +708,30 @@ mod tests {
 
     #[test]
     fn test_matrix_multiply() {
-        let a = TernaryMatrix::from_flat(2, 3, vec![
-            Trit::One, Trit::Zero, Trit::NegOne,
-            Trit::Zero, Trit::One, Trit::One,
-        ]);
-        let b = TernaryMatrix::from_flat(3, 2, vec![
-            Trit::One, Trit::One,
-            Trit::Zero, Trit::NegOne,
-            Trit::One, Trit::Zero,
-        ]);
+        let a = TernaryMatrix::from_flat(
+            2,
+            3,
+            vec![
+                Trit::One,
+                Trit::Zero,
+                Trit::NegOne,
+                Trit::Zero,
+                Trit::One,
+                Trit::One,
+            ],
+        );
+        let b = TernaryMatrix::from_flat(
+            3,
+            2,
+            vec![
+                Trit::One,
+                Trit::One,
+                Trit::Zero,
+                Trit::NegOne,
+                Trit::One,
+                Trit::Zero,
+            ],
+        );
 
         let c = a.matmul(&b);
         assert_eq!(c.rows, 2);
@@ -590,21 +746,46 @@ mod tests {
     #[test]
     fn test_encoder_produces_output() {
         let d_model = 4;
-        let d_ff = 4;
         let seq_len = 2;
 
-        let input = TernaryMatrix::from_flat(seq_len, d_model, vec![
-            Trit::One, Trit::Zero, Trit::NegOne, Trit::One,
-            Trit::Zero, Trit::One, Trit::One, Trit::Zero,
-        ]);
+        let input = TernaryMatrix::from_flat(
+            seq_len,
+            d_model,
+            vec![
+                Trit::One,
+                Trit::Zero,
+                Trit::NegOne,
+                Trit::One,
+                Trit::Zero,
+                Trit::One,
+                Trit::One,
+                Trit::Zero,
+            ],
+        );
 
         // Identity-like weight matrices
-        let w_q = TernaryMatrix::from_flat(d_model, d_model, vec![
-            Trit::One, Trit::Zero, Trit::Zero, Trit::Zero,
-            Trit::Zero, Trit::One, Trit::Zero, Trit::Zero,
-            Trit::Zero, Trit::Zero, Trit::One, Trit::Zero,
-            Trit::Zero, Trit::Zero, Trit::Zero, Trit::One,
-        ]);
+        let w_q = TernaryMatrix::from_flat(
+            d_model,
+            d_model,
+            vec![
+                Trit::One,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::One,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::One,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::One,
+            ],
+        );
         let w_k = w_q.clone();
         let w_v = w_q.clone();
         let w_o = w_q.clone();
@@ -628,28 +809,62 @@ mod tests {
         let seq_len_src = 2;
         let seq_len_tgt = 2;
 
-        let source = TernaryMatrix::from_flat(seq_len_src, d_model, vec![
-            Trit::One, Trit::NegOne, Trit::Zero, Trit::One,
-            Trit::Zero, Trit::One, Trit::One, Trit::NegOne,
-        ]);
-        let target = TernaryMatrix::from_flat(seq_len_tgt, d_model, vec![
-            Trit::One, Trit::Zero, Trit::One, Trit::Zero,
-            Trit::NegOne, Trit::One, Trit::Zero, Trit::One,
-        ]);
+        let source = TernaryMatrix::from_flat(
+            seq_len_src,
+            d_model,
+            vec![
+                Trit::One,
+                Trit::NegOne,
+                Trit::Zero,
+                Trit::One,
+                Trit::Zero,
+                Trit::One,
+                Trit::One,
+                Trit::NegOne,
+            ],
+        );
+        let target = TernaryMatrix::from_flat(
+            seq_len_tgt,
+            d_model,
+            vec![
+                Trit::One,
+                Trit::Zero,
+                Trit::One,
+                Trit::Zero,
+                Trit::NegOne,
+                Trit::One,
+                Trit::Zero,
+                Trit::One,
+            ],
+        );
 
         // Identity-like weights for all projections
-        let identity = TernaryMatrix::from_flat(d_model, d_model, vec![
-            Trit::One, Trit::Zero, Trit::Zero, Trit::Zero,
-            Trit::Zero, Trit::One, Trit::Zero, Trit::Zero,
-            Trit::Zero, Trit::Zero, Trit::One, Trit::Zero,
-            Trit::Zero, Trit::Zero, Trit::Zero, Trit::One,
-        ]);
+        let identity = TernaryMatrix::from_flat(
+            d_model,
+            d_model,
+            vec![
+                Trit::One,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::One,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::One,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::Zero,
+                Trit::One,
+            ],
+        );
 
         let output = ternary_transformer_forward(
-            &source, &target,
-            &identity, &identity, &identity, &identity, &identity, &identity,
-            &identity, &identity, &identity, &identity,
-            &identity, &identity, &identity, &identity,
+            &source, &target, &identity, &identity, &identity, &identity, &identity, &identity,
+            &identity, &identity, &identity, &identity, &identity, &identity, &identity, &identity,
             &identity, &identity,
         );
 
@@ -664,10 +879,18 @@ mod tests {
 
     #[test]
     fn test_matrix_transpose() {
-        let m = TernaryMatrix::from_flat(2, 3, vec![
-            Trit::One, Trit::Zero, Trit::NegOne,
-            Trit::Zero, Trit::One, Trit::One,
-        ]);
+        let m = TernaryMatrix::from_flat(
+            2,
+            3,
+            vec![
+                Trit::One,
+                Trit::Zero,
+                Trit::NegOne,
+                Trit::Zero,
+                Trit::One,
+                Trit::One,
+            ],
+        );
         let t = m.transpose();
         assert_eq!(t.rows, 3);
         assert_eq!(t.cols, 2);
