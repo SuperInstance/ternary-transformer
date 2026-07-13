@@ -3,7 +3,7 @@
 The full transformer architecture — attention, encoding, decoding, position encoding, FFN, residual connections — where every weight, activation, and intermediate value lives in ℤ₃ = {-1, 0, 1}.
 
 [![crates.io](https://img.shields.io/crates/v/ternary-transformer.svg)](https://crates.io/crates/ternary-transformer)
-[![docs.rs](https://docs.rs/ternary-transformer/badge.svg)](docs.rs/ternary-transformer)
+[![docs.rs](https://docs.rs/ternary-transformer/badge.svg)](https://docs.rs/ternary-transformer)
 
 ---
 
@@ -19,23 +19,28 @@ This crate implements the *entire* transformer in ℤ₃ — not a hybrid, not a
 
 ## Quick Start
 
+The snippet below is **illustrative** (placeholders elided for brevity, not runnable as-is). See `src/lib.rs` tests for fully worked, compiling examples.
+
 ```rust
-use ternary_transformer::*;
+use ternary_transformer::{Trit, TernaryMatrix, ternary_transformer_forward};
 
-// Input matrices: rows = sequence length, cols = d_model
-let source = TernaryMatrix::from_flat(4, 8, /* ... trits ... */);
-let target = TernaryMatrix::from_flat(3, 8, /* ... trits ... */);
+// Input matrices: rows = sequence length, cols = d_model.
+// Each entry is a Trit (NegOne / Zero / One).
+let source = TernaryMatrix::from_flat(4, 8, vec![/* 4 * 8 = 32 Trits */]);
+let target = TernaryMatrix::from_flat(3, 8, vec![/* 3 * 8 = 24 Trits */]);
 
-// Weight matrices (learned or quantized from a pre-trained model)
-let identity = /* d_model × d_model identity-like matrix */;
+// Every weight below is a d_model x d_model TernaryMatrix, learned or
+// quantized from a pre-trained model (see ternary-quantize). Here `w`
+// stands in for one such matrix; the forward pass needs 18 of them.
+let w: TernaryMatrix = TernaryMatrix::zeros(8, 8);
 
-// Full encoder-decoder forward pass
-let output = ternary_transformer_forward(
+// Full encoder-decoder forward pass.
+let _output = ternary_transformer_forward(
     &source, &target,
-    &enc_wq, &enc_wk, &enc_wv, &enc_wo, &enc_w1, &enc_w2,
-    &dec_wq_self, &dec_wk_self, &dec_wv_self, &dec_wo_self,
-    &dec_wq_cross, &dec_wk_cross, &dec_wv_cross, &dec_wo_cross,
-    &dec_w1, &dec_w2,
+    &w, &w, &w, &w, &w, &w,           // encoder: Wq Wk Wv Wo W1 W2
+    &w, &w, &w, &w,                    // decoder self-attn: Wq Wk Wv Wo
+    &w, &w, &w, &w,                    // decoder cross-attn: Wq Wk Wv Wo
+    &w, &w,                            // decoder FFN: W1 W2
 );
 ```
 
@@ -145,7 +150,7 @@ pub struct TernaryMatrix {
 A drone runs obstacle detection on a ternary neural network: LIDAR returns are quantized to {-1: approaching, 0: static, +1: receding}. The transformer processes a 16-token sequence (8 angular sectors × 2 time steps) through a 2-layer encoder with d_model=32.
 
 In ℤ₃, the entire forward pass needs:
-- **Weights**: 2 bits × 32 × 32 × 6 matrices = 1,228 bytes per layer
+- **Weights**: 2 bits × 32 × 32 × 6 matrices = 1,536 bytes per layer (12,288 bits)
 - **Activations**: 2 bits × 16 × 32 = 128 bytes
 - **No floating-point unit**: just sign comparisons and modular adds
 
@@ -183,7 +188,7 @@ No SIMD, no GPU. The ℤ₃ operations are branching-heavy — a hardware implem
 cargo test
 ```
 
-11 tests: all 9 addition pairs, all multiplication pairs, attention weight computation against manual calculation, multi-head head splitting and concatenation, position encoding uniqueness (no two positions identical), residual zero-passthrough and doubling behavior, matrix multiply and transpose, full encoder block, full transformer forward pass end-to-end.
+19 tests covering: all 9 ℤ₃ addition pairs, all 9 multiplication pairs, `from_i8`/`to_i8`/`to_f32`/`negate` conversions, attention output checked against a full hand-computed 2×3 score matrix, multi-head head splitting/concatenation, position-encoding uniqueness for the verified `(seq_len=8, d_model=6)` config, residual zero-passthrough and doubling, matrix multiply and transpose (plus transpose self-inverse), FFN identity property, the full encoder block checked against an exact hand-derived output matrix, and the full transformer forward pass end-to-end. Error paths (`ternary_dot`/`matmul` dimension mismatch, non-divisible `num_heads`) are covered with panic assertions.
 
 ## License
 
